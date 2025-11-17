@@ -36,12 +36,9 @@ header p {
 
 /* Контейнер */
 .container {
-    max-width: 1200px;
+    max-width: 800px;
     margin: 0 auto;
     padding: 0 1rem;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
-    gap: 2rem;
 }
 
 /* Карточки */
@@ -53,6 +50,11 @@ header p {
     transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
 
+.card.unified {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
 .card:hover {
     transform: translateY(-5px);
     box-shadow: 0 15px 40px rgba(0, 0, 0, 0.3);
@@ -61,13 +63,24 @@ header p {
 .card h2 {
     color: #4a5568;
     font-size: 1.8rem;
-    margin-bottom: 0.5rem;
+    margin-bottom: 1.5rem;
     font-weight: 600;
+    text-align: center;
 }
 
 .card > p {
     color: #718096;
     margin-bottom: 1.5rem;
+}
+
+.type-description {
+    color: #718096;
+    margin-bottom: 1.5rem;
+    padding: 0.75rem;
+    background: #f7fafc;
+    border-radius: 8px;
+    text-align: center;
+    font-style: italic;
 }
 
 /* Группы полей */
@@ -80,6 +93,23 @@ header p {
     margin-bottom: 0.5rem;
     font-weight: 500;
     color: #4a5568;
+}
+
+/* Select элементы */
+select {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid #cbd5e0;
+    border-radius: 8px;
+    font-size: 1rem;
+    background: white;
+    cursor: pointer;
+}
+
+select:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
 }
 
 /* Поля ввода файлов */
@@ -280,3 +310,4 @@ footer p {
         font-size: 1rem;
     }
 }
+

@@ -1,4 +1,3 @@
-import os
 import sys
 from pathlib import Path
 from io import BytesIO
@@ -17,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # Импортируем процессоры
 try:
-    from processors import processor_rus, processor_foreign
+    from processors import processor_rus, processor_foreign, processor_third
 except ImportError as e:
     print(f"Ошибка импорта процессоров: {e}")
     # Создаем заглушки для отладки
@@ -28,6 +27,7 @@ except ImportError as e:
 
     processor_rus = MockProcessor()
     processor_foreign = MockProcessor()
+    processor_third = MockProcessor()
 
 app = FastAPI(title="Обработка отчётов", description="API для обработки отчётов российских и иностранных передач")
 
@@ -46,8 +46,8 @@ async def process_rus_report(
     schedule_file: UploadFile = File(..., description="Файл сетки"),
     report_file: UploadFile = File(..., description="Файл отчёта"),
     max_shows: int = Form(3, description="Максимальное количество показов"),
-    fuzzy_cutoff: float = Form(0.05, description="Порог нечёткого поиска"),
-    min_token_overlap: float = Form(0.10, description="Минимальное пересечение токенов"),
+    fuzzy_cutoff: float = Form(0.70, description="Порог нечёткого поиска (0.0-1.0)"),
+    min_token_overlap: float = Form(0.50, description="Минимальное пересечение токенов (0.0-1.0)"),
     delete_unmatched: bool = Form(False, description="Удалять несовпадающие строки")
 ):
     """Обработка российского отчёта"""
@@ -109,8 +109,8 @@ async def process_foreign_report(
     schedule_file: UploadFile = File(..., description="Файл сетки"),
     report_file: UploadFile = File(..., description="Файл отчёта"),
     max_shows: int = Form(3, description="Максимальное количество показов"),
-    fuzzy_cutoff: float = Form(0.05, description="Порог нечёткого поиска"),
-    min_token_overlap: float = Form(0.10, description="Минимальное пересечение токенов"),
+    fuzzy_cutoff: float = Form(0.70, description="Порог нечёткого поиска (0.0-1.0)"),
+    min_token_overlap: float = Form(0.50, description="Минимальное пересечение токенов (0.0-1.0)"),
     delete_unmatched: bool = Form(False, description="Удалять несовпадающие строки")
 ):
     """Обработка иностранного отчёта"""
@@ -167,6 +167,40 @@ async def process_foreign_report(
         raise HTTPException(status_code=500, detail=f"Ошибка обработки: {str(e)}")
 
 
+@app.post("/api/process/third")
+async def process_third_report(
+    schedule_file: UploadFile = File(..., description="Файл сетки"),
+    report_file: UploadFile = File(..., description="Файл отчёта"),
+    max_shows: int = Form(3, description="Максимальное количество показов"),
+    fuzzy_cutoff: float = Form(0.70, description="Порог нечёткого поиска (0.0-1.0)"),
+    min_token_overlap: float = Form(0.50, description="Минимальное пересечение токенов (0.0-1.0)"),
+    delete_unmatched: bool = Form(False, description="Удалять несовпадающие строки")
+):
+    """Пока заглушка: возвращает файл отчёта без изменений."""
+    try:
+        schedule_bytes = await schedule_file.read()
+        report_bytes = await report_file.read()
+        if len(report_bytes) == 0:
+            raise HTTPException(status_code=400, detail="Файл отчёта пуст")
+        params = {
+            'max_shows': max_shows,
+            'fuzzy_cutoff': fuzzy_cutoff,
+            'min_token_overlap': min_token_overlap,
+            'delete_unmatched': delete_unmatched
+        }
+        result_bytes = processor_third.process(schedule_bytes, report_bytes, params)
+        return StreamingResponse(
+            BytesIO(result_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment; filename=report_third_ready.xlsx"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Ошибка обработки третьего отчёта: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка обработки: {str(e)}")
+
+
 @app.get("/health")
 async def health_check():
     """Проверка здоровья сервиса"""
@@ -182,3 +216,4 @@ if static_path.exists():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+

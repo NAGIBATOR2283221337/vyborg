@@ -1,493 +1,364 @@
-import os
-import shutil
-import tempfile
-import re
-import gc
-import time
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Set
-import datetime
-import difflib
-
+import re, os, tempfile
+from io import BytesIO
+from difflib import SequenceMatcher
+from typing import Dict, Tuple, Set, List, Optional
+from datetime import datetime
 import pandas as pd
-import openpyxl
-from openpyxl import load_workbook
+from openpyxl.worksheet.worksheet import Worksheet
 
+# -------- ПАРАМЕТРЫ ПО УМОЛЧАНИЮ --------
+DEFAULTS = dict(
+    max_shows=3,
+    fuzzy_cutoff=0.60,  # Снижен с 0.70 для более мягкого сопоставления
+    min_token_overlap=0.40,  # Снижен с 0.50
+    delete_unmatched=True  # Включено: удаляем строки без времени показа
+)
 
-def ensure_real_xlsx(path: str) -> str:
+TITLE_HEADER_CANDS = [
+    "наименование аудиовизуального произведения",
+    "наименование аудиовизуального произведения (номер и название серии)",
+    "название передачи", "наименование передачи", "название программы", "наименование программы",
+]
+DATE_HEADER_CANDS = [
+    "дата и время выхода в эфир (число, часы, мин.)",
+    "дата и время выхода в эфир", "дата выхода в эфир","время выхода в эфир",
+]
+
+NOISE_TOKENS = {
+    "ред","ред.","редакция","final","master","v2","v3","copy","копия","коп","сору",
+    "hdrip","webrip","web","rip","bdrip","1080p","720p","uhd","4k","fullhd","hd","sd","h264","x264","x265","hevc","avc",
+}
+
+MONTHS_RU = {"января":"01","февраля":"02","марта":"03","апреля":"04","мая":"05","июня":"06",
+             "июля":"07","августа":"08","сентября":"09","октября":"10","ноября":"11","декабря":"12"}
+
+def _norm(s:str)->str:
+    return re.sub(r"\s+"," ",str(s).strip().lower().replace("ё","е"))
+
+def denoise_tokens(s: str) -> str:
+    s = _norm(s)
+    s = re.sub(r"\([^)]*\)", " ", s)
+    s = re.sub(r"\.(mp4|mov|mxf|avi|mkv)\b.*$", " ", s, flags=re.I)
+    s = re.sub(r"^\s*\d{3,}[-_ ]+", " ", s)
+    toks = re.split(r"[^\w]+", s)
+    clean=[]
+    for t in toks:
+        if not t: continue
+        if re.fullmatch(r"\d{3,}", t): continue
+        if t in NOISE_TOKENS: continue
+        clean.append(t)
+    return " ".join(clean).strip(" .-–—")
+
+def normalize_base(title:str)->str:
+    base = denoise_tokens(title or "")
+    base = re.sub(r"\b\d{1,3}\s*(сер(ия|ии|и)|вып(уск|уски|\.?))\b"," ",base)
+    base = re.sub(r"\b(сер(ия|ии|и)|вып(уск|уски|\.?))\s*\d{1,3}\b"," ",base)
+    base = re.sub(r"\b\d{1,3}\s*-\s*\d{1,3}\b"," ",base)
+    return re.sub(r"\s+"," ",base).strip(" .-–—")
+
+def extract_series_set(text:str)->Set[str]:
+    s = _norm(text)
+    nums=set()
+    for m in re.finditer(r"\b(\d{1,3})\s*(?:-?\s*я)?\s*сер(ия|ии|и)\b",s): nums.add(m.group(1))
+    for m in re.finditer(r"\bсер(ия|ии|и)\s*(\d{1,3})\b",s): nums.add(m.group(2))
+    for m in re.finditer(r"\b(\d{1,3})\s*вып(уск|уски|\.?)\b",s): nums.add(m.group(1))
+    for m in re.finditer(r"\bвып(уск|уски|\.?)\s*(\d{1,3})\b",s): nums.add(m.group(2))
+    for m in re.finditer(r"\b(\d{1,3})\s*-\s*(\d{1,3})\s*(?:сер|вып)\b",s):
+        a,b=int(m.group(1)),int(m.group(2))
+        for n in range(min(a,b),max(a,b)+1): nums.add(str(n))
+    for m in re.finditer(r"\b(\d{1,3})(?:\s*,\s*(\d{1,3}))+?\s*(?:сер|вып)\b",s):
+        for n in re.findall(r"\d{1,3}",m.group(0)): nums.add(n)
+    if not nums:
+        m=re.search(r"\b(\d{1,3})\b",s)
+        if m: nums.add(m.group(1))
+    return nums or {"__NOSER__"}
+
+def tokenize(s:str)->List[str]:
+    return [t for t in re.split(r"[^\w]+",_norm(s)) if t]
+
+def jaccard_over_min(a:List[str],b:List[str])->float:
+    if not a or not b: return 0.0
+    A=set(a); B=set(b)
+    return len(A&B)/min(len(A),len(B))
+
+def seq_ratio(a:str,b:str)->float:
+    return SequenceMatcher(a=a,b=b).ratio()
+
+def parse_time_from_str(x)->Optional[str]:
+    """Извлекает время из различных форматов.
+
+    Поддерживает:
+    - Строки: "6:00", "06:00", "6:00:00"
+    - Excel числа: 0.25 (= 06:00)
+    - pandas Timestamp
+    - datetime objects
     """
-    Многоступенчатая конверсия .xls → .xlsx
-    1. Проверяем через openpyxl
-    2. Пробуем Excel COM (SaveAs 51)
-    3. LibreOffice soffice --headless --convert-to xlsx
-    4. pandas fallback
-    """
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Файл не найден: {path}")
-
-    # Если уже xlsx и читается openpyxl - возвращаем как есть
-    if path.lower().endswith('.xlsx'):
-        wb = None
-        try:
-            wb = load_workbook(path)
-            # Проверяем, что файл читается
-            _ = wb.active
-            return path
-        except Exception:
-            pass
-        finally:
-            if wb is not None:
-                try:
-                    wb.close()
-                except:
-                    pass
-            # Принудительное освобождение
-            wb = None
-            gc.collect()
-            time.sleep(0.2)
-
-    # Создаем новый путь .xlsx
-    base_name = os.path.splitext(path)[0]
-    xlsx_path = f"{base_name}.xlsx"
-
-    # Этап 1: Попробуем openpyxl (для .xls не сработает, но попробуем)
-    try:
-        wb = load_workbook(path)
-        wb.save(xlsx_path)
-        wb.close()  # Важно: закрываем файл
-        gc.collect()  # Освобождаем память
-        time.sleep(0.1)  # Небольшая задержка для полного освобождения файла
-
-        # Проверяем, что файл создался и доступен
-        if os.path.exists(xlsx_path):
-            return xlsx_path
-    except Exception:
-        pass
-
-    # Этап 2: Excel COM (только на Windows)
-    if os.name == 'nt':
-        try:
-            import win32com.client
-            excel = win32com.client.Dispatch("Excel.Application")
-            excel.Visible = False
-            wb = excel.Workbooks.Open(os.path.abspath(path))
-            wb.SaveAs(os.path.abspath(xlsx_path), FileFormat=51)  # xlOpenXMLWorkbook
-            wb.Close()
-            excel.Quit()
-            if os.path.exists(xlsx_path):
-                return xlsx_path
-        except Exception:
-            pass
-
-    # Этап 3: LibreOffice
-    try:
-        import subprocess
-        result = subprocess.run([
-            'soffice', '--headless', '--convert-to', 'xlsx',
-            '--outdir', os.path.dirname(path), path
-        ], capture_output=True, timeout=30)
-        if result.returncode == 0 and os.path.exists(xlsx_path):
-            return xlsx_path
-    except Exception:
-        pass
-
-    # Этап 4: pandas fallback
-    try:
-        if path.lower().endswith('.xls'):
-            df = pd.read_excel(path, sheet_name=None)  # Читаем все листы
-            with pd.ExcelWriter(xlsx_path, engine='openpyxl') as writer:
-                for sheet_name, sheet_df in df.items():
-                    sheet_df.to_excel(writer, sheet_name=sheet_name, index=False)
-            if os.path.exists(xlsx_path):
-                return xlsx_path
-    except Exception:
-        pass
-
-    # Если ничего не помогло, возвращаем исходный путь
-    return path
-
-
-def normalize_base(title: str) -> str:
-    """Нормализация названий с вырезанием артикулов, расширений и мусора"""
-    if not title:
-        return ""
-
-    title = str(title).strip()
-    original_title = title  # Сохраняем для отладки
-
-    # Удаляем номера серий и эпизодов в различных форматах
-    title = re.sub(r'\s+\d+[,\s]*\d*\s*', ' ', title)  # "61, 62" или "63, 64"
-    title = re.sub(r'\s*№\s*\d+', '', title)  # "№ 5"
-
-    # Удаляем артикулы и коды в скобках
-    title = re.sub(r'\([^)]*\)', '', title)
-
-    # Удаляем (ред), (редакция)
-    title = re.sub(r'\s*\(ред\w*\)', '', title, flags=re.IGNORECASE)
-
-    # Удаляем copy, копия
-    title = re.sub(r'\s*cop[yi]e?\s*\d*', '', title, flags=re.IGNORECASE)
-    title = re.sub(r'\s*копи[яи]\s*\d*', '', title, flags=re.IGNORECASE)
-
-    # Удаляем служебные слова
-    title = re.sub(r'\b(серия|серии|выпуск|передача|программа|фильм|эпизод)\b', '', title, flags=re.IGNORECASE)
-
-    # Удаляем диапазоны дат
-    title = re.sub(r'\d{1,2}\.\d{1,2}\.\d{2,4}\s*-\s*\d{1,2}\.\d{1,2}\.\d{2,4}', '', title)
-
-    # Удаляем расширения файлов
-    title = re.sub(r'\.(mp4|avi|mkv|mov|wmv|mp3|wav)$', '', title, flags=re.IGNORECASE)
-
-    # Очистка лишних пробелов
-    title = re.sub(r'\s+', ' ', title).strip()
-
-    # Приводим к нижнему регистру для сопоставления
-    result = title.lower()
-
-    print(f"    Нормализация: '{original_title}' -> '{result}'")
-    return result
-
-
-def denoise_tokens(tokens: List[str]) -> List[str]:
-    """Удаляем шумовые токены"""
-    try:
-        # Пытаемся импортировать конфигурацию
-        import sys
-        import os
-        config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config.py')
-        if os.path.exists(config_path):
-            sys.path.insert(0, os.path.dirname(config_path))
-            import config
-            noise_words = config.STOP_WORDS
-        else:
-            # Fallback к встроенному списку
-            noise_words = {
-                'в', 'на', 'с', 'по', 'из', 'от', 'до', 'для', 'про', 'под', 'над', 'при',
-                'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with'
-            }
-    except:
-        noise_words = {
-            'в', 'на', 'с', 'по', 'из', 'от', 'до', 'для', 'про', 'под', 'над', 'при',
-            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with'
-        }
-
-    return [token for token in tokens if token.lower() not in noise_words and len(token) > 1]
-
-
-def tokenize(text: str) -> List[str]:
-    """Токенизация текста"""
-    if not text:
-        return []
-
-    # Оставляем только буквы, цифры и пробелы
-    text = re.sub(r'[^\w\s]', ' ', str(text), flags=re.UNICODE)
-    tokens = text.lower().split()
-    return denoise_tokens(tokens)
-
-
-def jaccard_over_min(tokens1: List[str], tokens2: List[str]) -> float:
-    """Коэффициент Жаккара с нормализацией на минимальное количество"""
-    if not tokens1 or not tokens2:
-        return 0.0
-
-    set1, set2 = set(tokens1), set(tokens2)
-    intersection = len(set1 & set2)
-    min_len = min(len(set1), len(set2))
-
-    return intersection / min_len if min_len > 0 else 0.0
-
-
-def seq_ratio(text1: str, text2: str) -> float:
-    """Коэффициент схожести через difflib.SequenceMatcher"""
-    if not text1 or not text2:
-        return 0.0
-    return difflib.SequenceMatcher(None, text1.lower(), text2.lower()).ratio()
-
-
-def parse_date_from_cell(value) -> Optional[str]:
-    """Парсинг даты из ячейки отчёта → "ДД.ММ.ГГГГ" """
-    if not value:
+    if x is None or (isinstance(x, float) and pd.isna(x)):
         return None
 
-    # Если это datetime объект
-    if isinstance(value, datetime.datetime):
-        return value.strftime("%d.%m.%Y")
-
-    if isinstance(value, datetime.date):
-        return value.strftime("%d.%m.%Y")
-
-    # Если строка, пробуем парсить
-    value_str = str(value).strip()
-
-    # Паттерны дат
-    patterns = [
-        r'(\d{1,2})\.(\d{1,2})\.(\d{4})',
-        r'(\d{1,2})/(\d{1,2})/(\d{4})',
-        r'(\d{1,2})-(\d{1,2})-(\d{4})',
-        r'(\d{4})-(\d{1,2})-(\d{1,2})',
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, value_str)
-        if match:
-            groups = match.groups()
-            if len(groups) == 3:
-                if pattern.startswith(r'(\d{4}'):  # YYYY-MM-DD
-                    year, month, day = groups
-                else:  # DD.MM.YYYY, DD/MM/YYYY, DD-MM-YYYY
-                    day, month, year = groups
-
-                try:
-                    dt = datetime.date(int(year), int(month), int(day))
-                    return dt.strftime("%d.%m.%Y")
-                except ValueError:
-                    continue
-
-    return None
-
-
-def parse_time_from_str(value) -> Optional[str]:
-    """Парсинг времени из сетки → "H:MM" """
-    if not value:
-        return None
-
-    value_str = str(value).strip()
-
-    # Паттерны времени
-    patterns = [
-        r'(\d{1,2}):(\d{2})',
-        r'(\d{1,2})\.(\d{2})',
-        r'(\d{1,2})\s*ч\s*(\d{2})',
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, value_str)
-        if match:
-            hour, minute = match.groups()
-            try:
-                h, m = int(hour), int(minute)
-                if 0 <= h <= 23 and 0 <= m <= 59:
-                    return f"{h}:{minute.zfill(2)}"
-            except ValueError:
-                continue
-
-    return None
-
-
-def parse_dt_key(date_str: str) -> str:
-    """Преобразуем дату в ключ для индекса"""
-    return date_str
-
-
-def limit_and_format(full_dt_list: List[str], limit: int) -> str:
-    """
-    Ограничение и форматирование показов
-    Сортировка по дате/времени, дедупликация, формат "ДД.MM.ГГГГ в H:MM"
-    """
-    if not full_dt_list:
-        return ""
-
-    # Дедупликация
-    unique_items = list(dict.fromkeys(full_dt_list))
-
-    # Сортировка (предполагаем, что элементы уже в формате "ДД.MM.ГГГГ в H:MM")
-    def sort_key(item):
+    # pandas Timestamp или datetime
+    if isinstance(x, (pd.Timestamp, datetime)):
         try:
-            # Извлекаем дату и время для сортировки
-            parts = item.split(' в ')
-            if len(parts) == 2:
-                date_part, time_part = parts
-                day, month, year = date_part.split('.')
-                hour, minute = time_part.split(':')
-                return datetime.datetime(int(year), int(month), int(day), int(hour), int(minute))
+            # ИСПРАВЛЕНИЕ: проверяем на NaN и преобразуем атрибуты в int
+            if pd.isna(x.hour) or pd.isna(x.minute):
+                return None
+            hour = int(x.hour)
+            minute = int(x.minute)
+            return f"{hour}:{minute:02d}"
+        except (ValueError, AttributeError):
+            return None
+
+    # Excel время как доля суток (0.0 - 1.0)
+    if isinstance(x, (int, float)):
+        try:
+            f = float(x)
+            # Проверяем, что это похоже на время (0.0-1.0)
+            if 0.0 <= f < 1.0:
+                total_seconds = int(f * 24 * 3600)
+                hours = total_seconds // 3600
+                minutes = (total_seconds % 3600) // 60
+                return f"{hours}:{minutes:02d}"
+            # Если число >= 1, возможно это просто час
+            elif f < 24:
+                return f"{int(f)}:00"
         except:
             pass
-        return datetime.datetime.min
 
-    unique_items.sort(key=sort_key)
+    # Строковый формат
+    try:
+        s = str(x).strip()
+    except:
+        return None
 
-    # Ограничиваем количество
-    limited = unique_items[:limit]
+    # Формат: "HH:MM" или "HH:MM:SS"
+    m = re.match(r"^\s*(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?\s*$", s)
+    if m:
+        try:
+            h, mi = int(m.group(1)), int(m.group(2))
+            if 0 <= h < 24 and 0 <= mi < 60:
+                return f"{h}:{mi:02d}"
+        except:
+            pass
 
-    return "; ".join(limited)
+    # Одиночное число - трактуем как час
+    if re.fullmatch(r"\d{1,2}", s):
+        try:
+            h = int(float(s))  # На случай если "6.0"
+            if 0 <= h < 24:
+                return f"{h}:00"
+        except:
+            pass
 
+    return None
 
-def is_title_header(cell_value: str) -> bool:
-    """Проверяем, является ли ячейка заголовком названия"""
-    if not cell_value:
-        return False
+def parse_date_label_ru(text:str)->Optional[str]:
+    """Извлекает дату из текста в разных форматах.
 
-    value = str(cell_value).lower().strip()
-
-    title_keywords = [
-        'название передачи',
-        'наименование аудиовизуального произведения',
-        'название',
-        'наименование',
-        'передача',
-        'произведение'
-    ]
-
-    for keyword in title_keywords:
-        if keyword in value:
-            return True
-
-    return False
-
-
-def is_datetime_header(cell_value: str) -> bool:
-    """Проверяем, является ли ячейка заголовком даты/времени"""
-    if not cell_value:
-        return False
-
-    value = str(cell_value).lower().strip()
-
-    datetime_keywords = [
-        'дата',
-        'время',
-        'дата и время',
-        'дата/время',
-        'показ',
-        'эфир',
-        'трансляция'
-    ]
-
-    for keyword in datetime_keywords:
-        if keyword in value:
-            return True
-
-    return False
-
-
-def find_headers_any(ws) -> Tuple[int, int, int]:
+    Поддерживает:
+    - "1 сентября 2025"
+    - "Понедельник, 1 сентября 2025"
+    - "01.09.2025"
+    - "01.09.25"
     """
-    Универсальный поиск заголовков на листе отчёта
-    Возвращает: (header_row, title_col, date_col)
-    """
-    max_row = min(ws.max_row, 30)  # Увеличиваем до 30 строк для поиска заголовков глубже
-    max_col = min(ws.max_column, 12)  # Ограничиваем поиск по колонкам
-
-    print(f"🔍 Поиск заголовков в области {max_row}x{max_col}")
-
-    for row in range(1, max_row + 1):
-        title_col = None
-        date_col = None
-
-        for col in range(1, max_col + 1):
-            cell_value = ws.cell(row, col).value
-            if cell_value:
-                if is_title_header(str(cell_value)):
-                    title_col = col
-                elif is_datetime_header(str(cell_value)):
-                    date_col = col
-
-        if title_col and date_col:
-            return row, title_col, date_col
-
-    # Если не нашли оба заголовка, возвращаем значения по умолчанию
-    return 1, 1, 2
-
-
-def build_schedule_index(schedule_xlsx: str) -> Tuple[Dict[str, pd.DataFrame], Dict[str, Set[str]]]:
-    """
-    Индексация сетки по дате
-    Возвращает: schedule_by_date: {date: DataFrame(base,time)}, bases_by_date: {date: set(bases)}
-    """
-    wb = None
-    schedule_by_date = {}
-    bases_by_date = {}
+    if not isinstance(text, str):
+        return None
 
     try:
-        wb = load_workbook(schedule_xlsx)
-        print(f"📚 Обрабатываем сетку, листов: {len(wb.sheetnames)}")
+        # Формат: "1 сентября 2025" или "Понедельник, 1 сентября 2025"
+        m = re.search(r"(\d{1,2})\s+([А-Яа-яЁё]+)\s+(\d{4})", text)
+        if m:
+            d, mon, y = m.groups()
+            mon_num = MONTHS_RU.get(_norm(mon))
+            if mon_num:
+                # Защита: явное преобразование в int через float
+                day = int(float(d))
+                year = int(float(y))
+                return f"{day:02d}.{mon_num}.{year}"
 
-        for sheet_name in wb.sheetnames:
-            ws = wb[sheet_name]
-            current_date = None
-            print(f"📄 Лист '{sheet_name}': {ws.max_row} строк, {ws.max_column} колонок")
+        # Формат: "01.09.2025"
+        m = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", text)
+        if m:
+            d, mon, y = m.groups()
+            day = int(float(d))
+            month = int(float(mon))
+            year = int(float(y))
+            return f"{day:02d}.{month:02d}.{year}"
 
-            for row in range(1, ws.max_row + 1):
-                cell_a = ws.cell(row, 1).value
-                cell_b = ws.cell(row, 2).value
+        # Формат: "01.09.25"
+        m = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{2})$", text)
+        if m:
+            d, mon, y = m.groups()
+            day = int(float(d))
+            month = int(float(mon))
+            year_short = int(float(y))
+            full_year = f"20{year_short}" if year_short < 50 else f"19{year_short}"
+            return f"{day:02d}.{month:02d}.{full_year}"
+    except Exception as e:
+        import logging
+        logging.error(f"Ошибка парсинга даты '{text}': {e}")
+        return None
 
-                if cell_a:
-                    cell_a_str = str(cell_a).strip()
-                    print(f"  Строка {row}: A='{cell_a_str}', B='{cell_b}'")
+    return None
 
-                    # Ищем строки с датой - расширенные паттерны
-                    date_patterns = [
-                        r'(\w+),\s*(\d{1,2})\s+(\w+)\s+(\d{4})',  # "Понедельник, 1 сентября 2025"
-                        r'(\d{1,2})\s+(\w+)\s+(\d{4})',          # "1 сентября 2025"
-                        r'(\d{1,2})\.(\d{1,2})\.(\d{4})',        # "01.09.2025"
-                    ]
+def parse_dt_key(full:str):
+    """Парсит строку вида '01.09.2025 в 6:00' в сортируемый ключ."""
+    try:
+        if not isinstance(full, str):
+            return (9999, 12, 31, 23, 59)
 
-                    date_found = False
-                    for pattern in date_patterns:
-                        match = re.search(pattern, cell_a_str)
-                        if match:
+        d, t = full.split(" в ")
+        dd, mm, yyyy = d.split(".")
+        h, m = t.split(":")
 
-                            groups = match.groups()
-                            print(f"    📅 Найдена дата, группы: {groups}")
+        # Защита: преобразуем через float на случай "01.0" и подобных
+        year = int(float(yyyy))
+        month = int(float(mm))
+        day = int(float(dd))
+        hour = int(float(h))
+        minute = int(float(m))
 
-                            if len(groups) == 4:  # "Понедельник, 1 сентября 2025"
-                                _, day, month_name, year = groups
-                            elif len(groups) == 3 and not groups[0].isdigit():  # "1 сентября 2025"
-                                day, month_name, year = groups
-                            elif len(groups) == 3 and groups[0].isdigit():  # "01.09.2025"
-                                day, month, year = groups
-                                # Преобразуем в нужный формат
-                                current_date = f"{day.zfill(2)}.{month.zfill(2)}.{year}"
-                                print(f"    ✅ Дата установлена: {current_date}")
-                                if current_date not in schedule_by_date:
-                                    schedule_by_date[current_date] = pd.DataFrame(columns=['base', 'time'])
-                                    bases_by_date[current_date] = set()
-                                date_found = True
-                                break
+        return (year, month, day, hour, minute)
+    except Exception as e:
+        import logging
+        logging.debug(f"Не удалось распарсить ключ даты/времени '{full}': {e}")
+        return (9999, 12, 31, 23, 59)
 
-                            if not date_found:
-                                # Преобразуем название месяца в номер
-                                months = {
-                                    'января': '01', 'февраля': '02', 'марта': '03', 'апреля': '04',
-                                    'мая': '05', 'июня': '06', 'июля': '07', 'августа': '08',
-                                    'сентября': '09', 'октября': '10', 'ноября': '11', 'декабря': '12'
-                                }
+def limit_and_format(full_list:List[str], limit:int)->str:
+    uniq=list(dict.fromkeys([x.strip() for x in full_list if x and str(x).strip()]))
+    uniq.sort(key=parse_dt_key)
+    return " и ".join(uniq[:limit])
 
-                                month_num = months.get(month_name.lower())
-                                if month_num:
-                                    current_date = f"{day.zfill(2)}.{month_num}.{year}"
-                                    print(f"    ✅ Дата установлена: {current_date}")
+def find_headers_any(ws: Worksheet, mapping=None):
+    def is_title(text:str)->bool:
+        t=_norm(text)
+        if mapping and "title" in mapping:
+            for cand in mapping["title"]:
+                if _norm(cand) in t: return True
+        return any(c in t for c in TITLE_HEADER_CANDS) or (("название" in t or "наименование" in t) and ("передач" in t or "произвед" in t or "программ" in t))
+    def is_dt(text:str)->bool:
+        t=_norm(text)
+        if mapping and "aircol" in mapping:
+            for cand in mapping["aircol"]:
+                if _norm(cand) in t: return True
+        return any(c in t for c in DATE_HEADER_CANDS) or ("дата" in t and "время" in t and "эфир" in t)
 
-                                    if current_date not in schedule_by_date:
-                                        schedule_by_date[current_date] = pd.DataFrame(columns=['base', 'time'])
-                                        bases_by_date[current_date] = set()
-                                    date_found = True
-                            break
+    header_row=title_col=date_col=None
+    for r in range(1, min(200, ws.max_row)+1):
+        for c in range(1, ws.max_column+1):
+            v=ws.cell(row=r,column=c).value
+            if isinstance(v,str) and is_title(v):
+                header_row, title_col = r, c
+                break
+        if header_row: break
+    if not header_row:
+        raise SystemExit("Не найден столбец с названием.")
 
-                    # Если есть текущая дата, пробуем извлечь время из колонки A
-                    if current_date and not date_found:
-                        time_parsed = parse_time_from_str(cell_a)
-                        if time_parsed and cell_b:
-                            base_normalized = normalize_base(str(cell_b))
-                            if base_normalized:
-                                # Добавляем запись
-                                new_row = pd.DataFrame([{
-                                    'base': base_normalized,
-                                    'time': time_parsed
-                                }])
-                                schedule_by_date[current_date] = pd.concat([
-                                    schedule_by_date[current_date], new_row
-                                ], ignore_index=True)
+    for c in range(1, ws.max_column+1):
+        v=ws.cell(row=header_row,column=c).value
+        if isinstance(v,str) and is_dt(v):
+            date_col=c; break
+    if date_col is None:
+        date_col=ws.max_column+1
+        ws.cell(row=header_row,column=date_col).value="Дата и время выхода в эфир"
+    return header_row, title_col, date_col
 
-                                bases_by_date[current_date].add(base_normalized)
+def build_schedule_index(schedule_xlsx_bytes: bytes, schedule_sheet: Optional[str]=None):
+    """Читает книгу Excel из bytes, строит индекс: date -> {(base, series): [HH:MM,...]}.
+
+    УЛУЧШЕНИЯ:
+    - Автоматически ищет дату в любой колонке (не только B)
+    - Поддерживает разные форматы дат
+    - Ищет время и название в соседних колонках
+    - Логирует процесс для отладки
+    """
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    mem = BytesIO(schedule_xlsx_bytes)
+    xls = pd.ExcelFile(mem)
+
+    try:
+        sheet = schedule_sheet if schedule_sheet and schedule_sheet in xls.sheet_names else xls.sheet_names[0]
+        logger.info(f"📖 Читаю лист: {sheet}")
+
+        df = pd.read_excel(xls, sheet_name=sheet, header=None)
+        logger.info(f"📏 Размер: {len(df)} строк × {len(df.columns)} колонок")
+
+        rows = []
+        current_date = None
+        date_found_count = 0
+        program_count = 0
+
+        for idx, row in df.iterrows():
+            # Ищем дату в ЛЮБОЙ колонке (не только в B)
+            date_found_in_row = False
+            for col_idx in range(len(row)):
+                val = row.iloc[col_idx]
+                if isinstance(val, str) and re.search(r"\d{4}", val):
+                    parsed_date = parse_date_label_ru(val)
+                    if parsed_date:
+                        current_date = parsed_date
+                        date_found_count += 1
+                        logger.info(f"📅 Строка {int(idx)+1}: Найдена дата '{current_date}' в колонке {col_idx}")
+                        date_found_in_row = True
+                        break
+
+            if date_found_in_row:
+                continue
+
+            # Теперь ищем время и название
+            # Обычно: колонка 0 = время, колонка 1 = название
+            # Но проверяем обе комбинации
+            time_val = None
+            title_val = None
+
+            # Вариант 1: A=время, B=название
+            if len(row) >= 2:
+                t1 = parse_time_from_str(row.iloc[0])
+                if t1 and pd.notna(row.iloc[1]):
+                    time_val = t1
+                    title_val = str(row.iloc[1]).strip()
+
+            # Вариант 2: B=время, A=название (если вариант 1 не сработал)
+            if not time_val and len(row) >= 2:
+                t2 = parse_time_from_str(row.iloc[1])
+                if t2 and pd.notna(row.iloc[0]):
+                    time_val = t2
+                    title_val = str(row.iloc[0]).strip()
+
+            # Проверяем, что у нас есть всё необходимое
+            if not (current_date and time_val and title_val):
+                continue
+
+            # Игнорируем служебные строки
+            if len(title_val) < 3 or title_val.lower() in ['nan', 'none', '']:
+                continue
+
+            base = normalize_base(title_val)
+            if not base or len(base) < 2:
+                continue
+
+            series_set = extract_series_set(title_val)
+            rows.append((current_date, base, series_set, time_val))
+            program_count += 1
+
+        logger.info(f"✅ Найдено дат: {date_found_count}, программ: {program_count}")
 
     finally:
-        if wb is not None:
-            try:
-                wb.close()
-            except:
-                pass
-        wb = None
-        gc.collect()  # Принудительное освобождение памяти
-        time.sleep(0.5)  # Увеличенная задержка для полного освобождения файла
+        xls.close()
 
-    return schedule_by_date, bases_by_date
+    # Строим индекс
+    schedule = {}
+    for d, base, sset, t in rows:
+        mp = schedule.setdefault(d, {})
+        for sn in sset:
+            mp.setdefault((base, sn), []).append(t)
+
+    # Сортируем времена
+    for d, mp in schedule.items():
+        for k, times in mp.items():
+            mp[k] = sorted(set(times), key=lambda x: (int(x.split(":")[0]), int(x.split(":")[1])))
+
+    logger.info(f"📊 Индекс построен: {len(schedule)} дат, {sum(len(mp) for mp in schedule.values())} уникальных программ")
+    return schedule

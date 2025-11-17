@@ -39,19 +39,38 @@ def norm_base_only(s: str) -> str:
     return " ".join(toks)
 
 def split_base_episodes(raw: str) -> Tuple[str, Set[int]]:
+    """
+    Извлекает базовое название и номера эпизодов/серий.
+
+    Поддерживает форматы:
+    - "Название. 63 серия" → ("название", {63})
+    - "Название 63,64" → ("название", {63, 64})
+    - "Название 63-64" → ("название", {63, 64})
+    - "Название. 2 выпуск" → ("название", {2})
+    - "Название" → ("название", set())
+    """
     s = norm(raw)
-    s = s.replace(' серия', '')
+    s = s.replace(' серия', '').replace(' выпуск', '').replace(' эпизод', '').replace(' часть', '')
+
     base, eps = s, set()
+
+    # Ищем числа в конце строки (возможно разделенные запятыми, дефисами, пробелами)
     m = re.search(r'(\d[\d\s,\-]*)$', s)
     if m:
         base = s[:m.start()].strip().strip('.')
         tail = m.group(1)
+
+        # Обрабатываем диапазоны (63-64)
         for tok in SEP.split(tail):
-            if not tok: continue
+            if not tok:
+                continue
             m2 = RANGE.fullmatch(tok)
             if m2:
-                a,b = int(m2.group(1)), int(m2.group(2))
-                for k in range(min(a,b), max(a,b)+1): eps.add(k)
+                a, b = int(m2.group(1)), int(m2.group(2))
+                for k in range(min(a, b), max(a, b) + 1):
+                    eps.add(k)
             elif tok.isdigit():
                 eps.add(int(tok))
-    return base, eps
+
+    # Если ничего не нашли, возвращаем исходную базу и пустое множество
+    return base.strip(), eps if eps else set()

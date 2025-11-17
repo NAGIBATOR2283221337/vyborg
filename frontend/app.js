@@ -1,5 +1,20 @@
 document.addEventListener('DOMContentLoaded', function() {
 
+    // Описания для разных типов отчётов
+    const descriptions = {
+        rus: 'Обработка отчёта с колонкой "Наименование аудиовизуального произведения"',
+        foreign: 'Обработка отчёта с колонкой "Название передачи"',
+        third: 'Пока заглушка – файл возвращается без изменений'
+    };
+
+    // Динамическое изменение описания при выборе типа
+    const reportTypeSelect = document.getElementById('report_type');
+    const typeDescription = document.getElementById('type_description');
+
+    reportTypeSelect.addEventListener('change', function() {
+        typeDescription.textContent = descriptions[this.value] || '';
+    });
+
     // Обновление значений слайдеров
     function updateSliderValue(sliderId, displayId) {
         const slider = document.getElementById(sliderId);
@@ -10,17 +25,13 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Инициализация слайдеров для российского отчёта
-    updateSliderValue('rus_fuzzy_cutoff', 'rus_fuzzy_value');
-    updateSliderValue('rus_token_overlap', 'rus_token_value');
-
-    // Инициализация слайдеров для иностранного отчёта
-    updateSliderValue('foreign_fuzzy_cutoff', 'foreign_fuzzy_value');
-    updateSliderValue('foreign_token_overlap', 'foreign_token_value');
+    // Инициализация слайдеров
+    updateSliderValue('fuzzy_cutoff', 'fuzzy_value');
+    updateSliderValue('token_overlap', 'token_value');
 
     // Функция для показа прогресса
-    function showProgress(progressId) {
-        const progressEl = document.getElementById(progressId);
+    function showProgress() {
+        const progressEl = document.getElementById('progress');
         progressEl.style.display = 'block';
 
         const progressBar = progressEl.querySelector('.progress-bar');
@@ -41,12 +52,12 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Функция для скрытия прогресса
-    function hideProgress(progressId, interval) {
+    function hideProgress(interval) {
         if (interval) {
             clearInterval(interval);
         }
 
-        const progressEl = document.getElementById(progressId);
+        const progressEl = document.getElementById('progress');
         const progressBar = progressEl.querySelector('.progress-bar');
         progressBar.style.width = '100%';
 
@@ -70,12 +81,31 @@ document.addEventListener('DOMContentLoaded', function() {
         window.URL.revokeObjectURL(url);
     }
 
-    // Функция для отправки формы
-    async function submitForm(formId, endpoint, progressId) {
-        const form = document.getElementById(formId);
-        const formData = new FormData(form);
+    // Обработчик для универсальной формы
+    document.getElementById('unifiedForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
 
-        const progressInterval = showProgress(progressId);
+        const scheduleFile = document.getElementById('schedule_file').files[0];
+        const reportFile = document.getElementById('report_file').files[0];
+        const reportType = document.getElementById('report_type').value;
+
+        if (!scheduleFile || !reportFile) {
+            alert('Пожалуйста, выберите оба файла (сетка и отчёт)');
+            return;
+        }
+
+        // Проверка размера файлов (максимум 100MB на файл)
+        const maxSize = 100 * 1024 * 1024; // 100MB
+        if (scheduleFile.size > maxSize || reportFile.size > maxSize) {
+            alert('Размер файла не должен превышать 100MB');
+            return;
+        }
+
+        // Определяем endpoint на основе типа отчёта
+        const endpoint = `/api/process/${reportType}`;
+
+        const formData = new FormData(this);
+        const progressInterval = showProgress();
 
         try {
             const response = await fetch(endpoint, {
@@ -92,7 +122,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Определяем имя файла из заголовка или используем дефолтное
             const contentDisposition = response.headers.get('Content-Disposition');
-            let filename = 'report_ready.xlsx';
+            let filename = `report_${reportType}_ready.xlsx`;
 
             if (contentDisposition) {
                 const match = contentDisposition.match(/filename="?([^"]+)"?/);
@@ -110,55 +140,11 @@ document.addEventListener('DOMContentLoaded', function() {
             console.error('Ошибка:', error);
             alert(`Ошибка обработки: ${error.message}`);
         } finally {
-            hideProgress(progressId, progressInterval);
+            hideProgress(progressInterval);
         }
-    }
-
-    // Обработчик для российского отчёта
-    document.getElementById('rusForm').addEventListener('submit', async function(e) {
-        e.preventDefault();
-
-        const scheduleFile = document.getElementById('rus_schedule').files[0];
-        const reportFile = document.getElementById('rus_report').files[0];
-
-        if (!scheduleFile || !reportFile) {
-            alert('Пожалуйста, выберите оба файла (сетка и отчёт)');
-            return;
-        }
-
-        // Проверка размера файлов (максимум 100MB на файл)
-        const maxSize = 100 * 1024 * 1024; // 100MB
-        if (scheduleFile.size > maxSize || reportFile.size > maxSize) {
-            alert('Размер файла не должен превышать 100MB');
-            return;
-        }
-
-        await submitForm('rusForm', '/api/process/rus', 'rus_progress');
     });
 
-    // Обработчик для иностранного отчёта
-    document.getElementById('foreignForm').addEventListener('submit', async function(e) {
-        e.preventDefault();
-
-        const scheduleFile = document.getElementById('foreign_schedule').files[0];
-        const reportFile = document.getElementById('foreign_report').files[0];
-
-        if (!scheduleFile || !reportFile) {
-            alert('Пожалуйста, выберите оба файла (сетка и отчёт)');
-            return;
-        }
-
-        // Проверка размера файлов (максимум 100MB на файл)
-        const maxSize = 100 * 1024 * 1024; // 100MB
-        if (scheduleFile.size > maxSize || reportFile.size > maxSize) {
-            alert('Размер файла не должен превышать 100MB');
-            return;
-        }
-
-        await submitForm('foreignForm', '/api/process/foreign', 'foreign_progress');
-    });
-
-    // Обработчики для drag & drop (опционально)
+    // Обработчики для drag & drop
     function setupDragAndDrop(inputId) {
         const input = document.getElementById(inputId);
         const parent = input.closest('.file-group');
@@ -202,11 +188,9 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Настройка drag & drop для всех file input'ов
-    setupDragAndDrop('rus_schedule');
-    setupDragAndDrop('rus_report');
-    setupDragAndDrop('foreign_schedule');
-    setupDragAndDrop('foreign_report');
+    // Настройка drag & drop для file input'ов
+    setupDragAndDrop('schedule_file');
+    setupDragAndDrop('report_file');
 
     // Валидация файлов при выборе
     document.querySelectorAll('input[type="file"]').forEach(input => {

@@ -14,108 +14,69 @@
 
     <main>
         <div class="container">
+            <!-- Универсальная форма обработки -->
+            <div class="card unified">
+                <h2>Обработка отчётов</h2>
 
-            <!-- Российский отчёт -->
-            <div class="card">
-                <h2>Российский отчёт</h2>
-                <p>Обработка отчёта с колонкой "Наименование аудиовизуального произведения"</p>
+                <form id="unifiedForm" enctype="multipart/form-data">
+                    <!-- Выбор типа отчёта -->
+                    <div class="param-item">
+                        <label for="report_type">Тип отчёта:</label>
+                        <select id="report_type" name="report_type" required>
+                            <option value="rus">Российский отчёт</option>
+                            <option value="foreign">Иностранный отчёт</option>
+                            <option value="third">Третий отчёт (заглушка)</option>
+                        </select>
+                    </div>
 
-                <form id="rusForm" enctype="multipart/form-data">
+                    <p id="type_description" class="type-description">
+                        Обработка отчёта с колонкой "Наименование аудиовизуального произведения"
+                    </p>
+
+                    <!-- Файлы -->
                     <div class="file-group">
-                        <label for="rus_schedule">Файл сетки:</label>
-                        <input type="file" id="rus_schedule" name="schedule_file" accept=".xls,.xlsx" required>
+                        <label for="schedule_file">Файл сетки:</label>
+                        <input type="file" id="schedule_file" name="schedule_file" accept=".xls,.xlsx" required>
                     </div>
 
                     <div class="file-group">
-                        <label for="rus_report">Файл отчёта:</label>
-                        <input type="file" id="rus_report" name="report_file" accept=".xls,.xlsx" required>
+                        <label for="report_file">Файл отчёта:</label>
+                        <input type="file" id="report_file" name="report_file" accept=".xls,.xlsx" required>
                     </div>
 
+                    <!-- Параметры обработки -->
                     <div class="params-group">
                         <h3>Параметры обработки</h3>
 
                         <div class="param-item">
-                            <label for="rus_max_shows">Максимальное количество показов:</label>
-                            <input type="number" id="rus_max_shows" name="max_shows" value="3" min="1" max="10">
+                            <label for="max_shows">Максимальное количество показов:</label>
+                            <input type="number" id="max_shows" name="max_shows" value="3" min="1" max="10">
                         </div>
 
                         <div class="param-item">
-                            <label for="rus_fuzzy_cutoff">Порог нечёткого поиска:</label>
-                            <input type="range" id="rus_fuzzy_cutoff" name="fuzzy_cutoff"
-                                   value="0.05" min="0" max="1" step="0.01">
-                            <span id="rus_fuzzy_value">0.05</span>
+                            <label for="fuzzy_cutoff">Порог нечёткого поиска:</label>
+                            <input type="range" id="fuzzy_cutoff" name="fuzzy_cutoff"
+                                   value="0.70" min="0" max="1" step="0.01">
+                            <span id="fuzzy_value">0.70</span>
                         </div>
 
                         <div class="param-item">
-                            <label for="rus_token_overlap">Минимальное пересечение токенов:</label>
-                            <input type="range" id="rus_token_overlap" name="min_token_overlap"
-                                   value="0.10" min="0" max="1" step="0.01">
-                            <span id="rus_token_value">0.10</span>
+                            <label for="token_overlap">Минимальное пересечение токенов:</label>
+                            <input type="range" id="token_overlap" name="min_token_overlap"
+                                   value="0.50" min="0" max="1" step="0.01">
+                            <span id="token_value">0.50</span>
                         </div>
 
                         <div class="param-item checkbox-item">
-                            <input type="checkbox" id="rus_delete_unmatched" name="delete_unmatched">
-                            <label for="rus_delete_unmatched">Удалять несовпадающие строки</label>
+                            <input type="checkbox" id="delete_unmatched" name="delete_unmatched">
+                            <label for="delete_unmatched">Удалять несовпадающие строки</label>
                         </div>
                     </div>
 
-                    <button type="submit" class="btn-process">Обработать российский отчёт</button>
+                    <button type="submit" class="btn-process">Обработать отчёт</button>
                 </form>
 
-                <div id="rus_progress" class="progress" style="display: none;">
-                    <div class="progress-bar"></div>
-                    <span>Обработка...</span>
-                </div>
-            </div>
-
-            <!-- Иностранный отчёт -->
-            <div class="card">
-                <h2>Иностранный отчёт</h2>
-                <p>Обработка отчёта с колонкой "Название передачи"</p>
-
-                <form id="foreignForm" enctype="multipart/form-data">
-                    <div class="file-group">
-                        <label for="foreign_schedule">Файл сетки:</label>
-                        <input type="file" id="foreign_schedule" name="schedule_file" accept=".xls,.xlsx" required>
-                    </div>
-
-                    <div class="file-group">
-                        <label for="foreign_report">Файл отчёта:</label>
-                        <input type="file" id="foreign_report" name="report_file" accept=".xls,.xlsx" required>
-                    </div>
-
-                    <div class="params-group">
-                        <h3>Параметры обработки</h3>
-
-                        <div class="param-item">
-                            <label for="foreign_max_shows">Максимальное количество показов:</label>
-                            <input type="number" id="foreign_max_shows" name="max_shows" value="3" min="1" max="10">
-                        </div>
-
-                        <div class="param-item">
-                            <label for="foreign_fuzzy_cutoff">Порог нечёткого поиска:</label>
-                            <input type="range" id="foreign_fuzzy_cutoff" name="fuzzy_cutoff"
-                                   value="0.05" min="0" max="1" step="0.01">
-                            <span id="foreign_fuzzy_value">0.05</span>
-                        </div>
-
-                        <div class="param-item">
-                            <label for="foreign_token_overlap">Минимальное пересечение токенов:</label>
-                            <input type="range" id="foreign_token_overlap" name="min_token_overlap"
-                                   value="0.10" min="0" max="1" step="0.01">
-                            <span id="foreign_token_value">0.10</span>
-                        </div>
-
-                        <div class="param-item checkbox-item">
-                            <input type="checkbox" id="foreign_delete_unmatched" name="delete_unmatched">
-                            <label for="foreign_delete_unmatched">Удалять несовпадающие строки</label>
-                        </div>
-                    </div>
-
-                    <button type="submit" class="btn-process">Обработать иностранный отчёт</button>
-                </form>
-
-                <div id="foreign_progress" class="progress" style="display: none;">
+                <div id="progress" class="progress" style="display: none;">
                     <div class="progress-bar"></div>
                     <span>Обработка...</span>
                 </div>

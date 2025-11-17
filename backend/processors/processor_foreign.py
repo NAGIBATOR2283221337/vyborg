@@ -20,3 +20,4 @@ def process(schedule_bytes: bytes, report_bytes: bytes, params: Dict) -> bytes:
         params = dict(params)  # копия чтобы не мутировать исходный
         params['sheet_name'] = 'иностранные произведения'
     return processor_rus.process(schedule_bytes, report_bytes, params)
+
