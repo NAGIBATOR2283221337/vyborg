@@ -50,18 +50,27 @@ def split_base_episodes(raw: str) -> Tuple[str, Set[int]]:
     - "Название" → ("название", set())
     """
     s = norm(raw)
-    s = s.replace(' серия', '').replace(' выпуск', '').replace(' эпизод', '').replace(' часть', '')
+
+    # Убираем служебные слова, но сохраняем числа рядом с ними
+    # "гора самоцветов. 63 серия" → "гора самоцветов 63"
+    s = re.sub(r'\b(серия|выпуск|эпизод|часть)\b', '', s)
+    s = re.sub(r'\s+', ' ', s).strip()
 
     base, eps = s, set()
 
-    # Ищем числа в конце строки (возможно разделенные запятыми, дефисами, пробелами)
-    m = re.search(r'(\d[\d\s,\-]*)$', s)
+    # Паттерн 1: Числа с явным указанием "серия/выпуск" (до удаления этих слов)
+    # Этот паттерн уже обработан выше через norm() и замену слов
+
+    # Паттерн 2: Диапазоны и списки чисел в конце
+    # "гора самоцветов 63 64" или "гора самоцветов 63,64" или "гора самоцветов 63-64"
+    m = re.search(r'[.\s]+(\d[\d\s,\-]*)$', s)
     if m:
-        base = s[:m.start()].strip().strip('.')
-        tail = m.group(1)
+        base = s[:m.start()].strip()
+        tail = m.group(1).strip()
 
         # Обрабатываем диапазоны (63-64)
         for tok in SEP.split(tail):
+            tok = tok.strip()
             if not tok:
                 continue
             m2 = RANGE.fullmatch(tok)
@@ -72,5 +81,14 @@ def split_base_episodes(raw: str) -> Tuple[str, Set[int]]:
             elif tok.isdigit():
                 eps.add(int(tok))
 
-    # Если ничего не нашли, возвращаем исходную базу и пустое множество
-    return base.strip(), eps if eps else set()
+    # Паттерн 3: Одиночное число в конце (если предыдущий паттерн не сработал)
+    if not eps:
+        m = re.search(r'\b(\d{1,3})\s*$', s)
+        if m:
+            eps.add(int(m.group(1)))
+            base = s[:m.start()].strip()
+
+    # Финальная очистка базы
+    base = base.strip(' .-–—')
+
+    return base, eps if eps else set()

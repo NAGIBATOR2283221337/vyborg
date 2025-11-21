@@ -1,0 +1,86 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="async-timeout" />
+          <option value="Automat" />
+          <option value="Babel" />
+          <option value="bcrypt" />
+          <option value="black" />
+          <option value="blinker" />
+          <option value="chardet" />
+          <option value="click" />
+          <option value="cloud-init" />
+          <option value="command-not-found" />
+          <option value="configobj" />
+          <option value="constantly" />
+          <option value="cryptography" />
+          <option value="dbus-python" />
+          <option value="distro-info" />
+          <option value="exceptiongroup" />
+          <option value="httplib2" />
+          <option value="hyperlink" />
+          <option value="importlib-metadata" />
+          <option value="incremental" />
+          <option value="jeepney" />
+          <option value="Jinja2" />
+          <option value="jsonpatch" />
+          <option value="jsonpointer" />
+          <option value="jsonschema" />
+          <option value="keyring" />
+          <option value="launchpadlib" />
+          <option value="lazr.restfulclient" />
+          <option value="lazr.uri" />
+          <option value="MarkupSafe" />
+          <option value="more-itertools" />
+          <option value="MouseInfo" />
+          <option value="mypy_extensions" />
+          <option value="netifaces" />
+          <option value="oauthlib" />
+          <option value="packaging" />
+          <option value="pathspec" />
+          <option value="pillow" />
+          <option value="platformdirs" />
+          <option value="pyasn1" />
+          <option value="pyasn1-modules" />
+          <option value="PyAutoGUI" />
+          <option value="pycurl" />
+          <option value="PyGetWindow" />
+          <option value="PyGObject" />
+          <option value="PyHamcrest" />
+          <option value="PyJWT" />
+          <option value="PyMsgBox" />
+          <option value="pyOpenSSL" />
+          <option value="pyparsing" />
+          <option value="pyperclip" />
+          <option value="PyRect" />
+          <option value="pyrsistent" />
+          <option value="PyScreeze" />
+          <option value="pyserial" />
+          <option value="python-apt" />
+          <option value="python3-xlib" />
+          <option value="pytokens" />
+          <option value="pytweening" />
+          <option value="pytz" />
+          <option value="PyYAML" />
+          <option value="requests" />
+          <option value="SecretStorage" />
+          <option value="service-identity" />
+          <option value="six" />
+          <option value="systemd-python" />
+          <option value="tomli" />
+          <option value="Twisted" />
+          <option value="ubuntu-pro-client" />
+          <option value="ufw" />
+          <option value="unattended-upgrades" />
+          <option value="urllib3" />
+          <option value="wadllib" />
+          <option value="zipp" />
+          <option value="zope.interface" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>

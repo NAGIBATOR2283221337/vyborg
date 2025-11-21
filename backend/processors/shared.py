@@ -56,22 +56,24 @@ def normalize_base(title:str)->str:
     base = re.sub(r"\b\d{1,3}\s*-\s*\d{1,3}\b"," ",base)
     return re.sub(r"\s+"," ",base).strip(" .-–—")
 
-def extract_series_set(text:str)->Set[str]:
+def extract_series_set(text:str)->Set[int]:
+    """Извлекает номера серий/выпусков из текста. Возвращает Set[int]."""
     s = _norm(text)
     nums=set()
-    for m in re.finditer(r"\b(\d{1,3})\s*(?:-?\s*я)?\s*сер(ия|ии|и)\b",s): nums.add(m.group(1))
-    for m in re.finditer(r"\bсер(ия|ии|и)\s*(\d{1,3})\b",s): nums.add(m.group(2))
-    for m in re.finditer(r"\b(\d{1,3})\s*вып(уск|уски|\.?)\b",s): nums.add(m.group(1))
-    for m in re.finditer(r"\bвып(уск|уски|\.?)\s*(\d{1,3})\b",s): nums.add(m.group(2))
+    for m in re.finditer(r"\b(\d{1,3})\s*(?:-?\s*я)?\s*сер(ия|ии|и)\b",s): nums.add(int(m.group(1)))
+    for m in re.finditer(r"\bсер(ия|ии|и)\s*(\d{1,3})\b",s): nums.add(int(m.group(2)))
+    for m in re.finditer(r"\b(\d{1,3})\s*вып(уск|уски|\.?)\b",s): nums.add(int(m.group(1)))
+    for m in re.finditer(r"\bвып(уск|уски|\.?)\s*(\d{1,3})\b",s): nums.add(int(m.group(2)))
     for m in re.finditer(r"\b(\d{1,3})\s*-\s*(\d{1,3})\s*(?:сер|вып)\b",s):
         a,b=int(m.group(1)),int(m.group(2))
-        for n in range(min(a,b),max(a,b)+1): nums.add(str(n))
+        for n in range(min(a,b),max(a,b)+1): nums.add(n)
     for m in re.finditer(r"\b(\d{1,3})(?:\s*,\s*(\d{1,3}))+?\s*(?:сер|вып)\b",s):
-        for n in re.findall(r"\d{1,3}",m.group(0)): nums.add(n)
+        for n in re.findall(r"\d{1,3}",m.group(0)): nums.add(int(n))
+    # Если нет явного указания на серию, но есть число в конце - используем его
     if not nums:
-        m=re.search(r"\b(\d{1,3})\b",s)
-        if m: nums.add(m.group(1))
-    return nums or {"__NOSER__"}
+        m=re.search(r"\.?\s*(\d{1,3})\s*$",s)
+        if m: nums.add(int(m.group(1)))
+    return nums if nums else set()
 
 def tokenize(s:str)->List[str]:
     return [t for t in re.split(r"[^\w]+",_norm(s)) if t]
@@ -340,6 +342,11 @@ def build_schedule_index(schedule_xlsx_bytes: bytes, schedule_sheet: Optional[st
                 continue
 
             series_set = extract_series_set(title_val)
+
+            # Для программ без серий используем специальный маркер
+            if not series_set:
+                series_set = {-1}  # Специальное значение для программ без серий
+
             rows.append((current_date, base, series_set, time_val))
             program_count += 1
 
